@@ -18,6 +18,7 @@ from functools import reduce, lru_cache
 from operator import mul
 from einops import rearrange
 from einops.layers.torch import Rearrange
+
 from .op.deform_attn import deform_attn, DeformAttnPack
 
 
@@ -41,7 +42,7 @@ def flow_warp(x, flow, interp_mode='bilinear', padding_mode='zeros', align_corne
     n, _, h, w = x.size()
     # create mesh grid
     grid_y, grid_x = torch.meshgrid(torch.arange(0, h, dtype=x.dtype, device=x.device),
-                                    torch.arange(0, w, dtype=x.dtype, device=x.device))
+                                    torch.arange(0, w, dtype=x.dtype, device=x.device), indexing='ij')
     grid = torch.stack((grid_x, grid_y), 2).float()  # W(x), H(y), 2
     grid.requires_grad = False
 
@@ -425,7 +426,7 @@ class WindowAttention(nn.Module):
         coords_d = torch.arange(window_size[0])
         coords_h = torch.arange(window_size[1])
         coords_w = torch.arange(window_size[2])
-        coords = torch.stack(torch.meshgrid(coords_d, coords_h, coords_w))  # 3, Wd, Wh, Ww
+        coords = torch.stack(torch.meshgrid(coords_d, coords_h, coords_w, indexing='ij'))  # 3, Wd, Wh, Ww
         coords_flatten = torch.flatten(coords, 1)  # 3, Wd*Wh*Ww
         relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 3, Wd*Wh*Ww, Wd*Wh*Ww
         relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wd*Wh*Ww, Wd*Wh*Ww, 3
@@ -545,14 +546,14 @@ class STL(nn.Module):
         """
 
         # attention
-        if self.use_checkpoint_attn:
-            x = x + checkpoint.checkpoint(self.forward_part1, x, mask_matrix)
+        if self.use_checkpoint_attn and x.requires_grad:
+            x = x + checkpoint.checkpoint(self.forward_part1, x, mask_matrix, use_reentrant=False)
         else:
             x = x + self.forward_part1(x, mask_matrix)
 
         # feed-forward
-        if self.use_checkpoint_ffn:
-            x = x + checkpoint.checkpoint(self.forward_part2, x)
+        if self.use_checkpoint_ffn and x.requires_grad:
+            x = x + checkpoint.checkpoint(self.forward_part2, x, use_reentrant=False)
         else:
             x = x + self.forward_part2(x)
 
